@@ -46,7 +46,7 @@ services:
       prepackage:
         windows:
           shell: pwsh
-          run: poetry install; poetry export -o requirements.txt
+          run: poetry export -o requirements.txt; pip install -r requirements.txt
         posix:
           shell: sh
-          run: poetry install; poetry export -o requirements.txt
+          run: poetry export -o requirements.txt; pip install -r requirements.txt

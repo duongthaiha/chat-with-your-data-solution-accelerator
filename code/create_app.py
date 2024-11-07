@@ -16,9 +16,11 @@ from flask import Flask, Response, request, Request, jsonify
 from dotenv import load_dotenv
 from urllib.parse import quote
 from backend.batch.utilities.helpers.env_helper import EnvHelper
+from backend.batch.utilities.helpers.azure_search_helper import AzureSearchHelper
 from backend.batch.utilities.helpers.orchestrator_helper import Orchestrator
 from backend.batch.utilities.helpers.config.config_helper import ConfigHelper
 from backend.batch.utilities.helpers.config.conversation_flow import ConversationFlow
+from backend.api.chat_history import bp_chat_history_response
 from azure.mgmt.cognitiveservices import CognitiveServicesManagementClient
 from azure.identity import DefaultAzureCredential
 from backend.batch.utilities.helpers.azure_blob_storage_client import (
@@ -67,6 +69,19 @@ def get_citations(citation_list):
             }
         )
     return citations_dict
+
+
+def should_use_data(
+    env_helper: EnvHelper, azure_search_helper: AzureSearchHelper
+) -> bool:
+    if (
+        env_helper.AZURE_SEARCH_SERVICE
+        and env_helper.AZURE_SEARCH_INDEX
+        and (env_helper.AZURE_SEARCH_KEY or env_helper.AZURE_AUTH_TYPE == "rbac")
+        and not azure_search_helper._index_not_exists(env_helper.AZURE_SEARCH_INDEX)
+    ):
+        return True
+    return False
 
 
 def stream_with_data(response: Stream[ChatCompletionChunk]):
@@ -137,7 +152,16 @@ def conversation_with_data(conversation: Request, env_helper: EnvHelper):
             azure_ad_token_provider=env_helper.AZURE_TOKEN_PROVIDER,
         )
 
-    messages = conversation.json["messages"]
+    request_messages = conversation.json["messages"]
+    messages = []
+    config = ConfigHelper.get_active_config_or_default()
+    if config.prompts.use_on_your_data_format:
+        messages.append(
+            {"role": "system", "content": config.prompts.answering_system_prompt}
+        )
+
+    for message in request_messages:
+        messages.append({"role": message["role"], "content": message["content"]})
 
     # Azure OpenAI takes the deployment name as the model name, "AZURE_OPENAI_MODEL" means
     # deployment name.
@@ -371,6 +395,7 @@ def create_app():
 
     app = Flask(__name__)
     env_helper: EnvHelper = EnvHelper()
+    azure_search_helper: AzureSearchHelper = AzureSearchHelper()
 
     logger.debug("Starting web app")
 
@@ -385,7 +410,7 @@ def create_app():
 
     def conversation_azure_byod():
         try:
-            if env_helper.should_use_data():
+            if should_use_data(env_helper, azure_search_helper):
                 return conversation_with_data(request, env_helper)
             else:
                 return conversation_without_data(request, env_helper)
@@ -501,4 +526,5 @@ def create_app():
         result = ConfigHelper.get_active_config_or_default()
         return jsonify({"ai_assistant_type": result.prompts.ai_assistant_type})
 
+    app.register_blueprint(bp_chat_history_response, url_prefix="/api")
     return app

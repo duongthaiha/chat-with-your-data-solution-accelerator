@@ -68,6 +68,14 @@ if "ai_assistant_type" not in st.session_state:
     st.session_state["ai_assistant_type"] = config.prompts.ai_assistant_type
 if "conversational_flow" not in st.session_state:
     st.session_state["conversational_flow"] = config.prompts.conversational_flow
+if "enable_chat_history" not in st.session_state:
+    st.session_state["enable_chat_history"] = st.session_state[
+        "enable_chat_history"
+    ] = (
+        config.enable_chat_history.lower() == "true"
+        if isinstance(config.enable_chat_history, str)
+        else config.enable_chat_history
+    )
 
 if env_helper.AZURE_SEARCH_USE_INTEGRATED_VECTORIZATION:
     if "max_page_length" not in st.session_state:
@@ -95,10 +103,23 @@ def validate_answering_user_prompt():
         st.warning("Your answering prompt doesn't contain the variable `{question}`")
 
 
-def config_contract_assistant_prompt():
-    if st.session_state["ai_assistant_type"] == AssistantStrategy.CONTRACT_ASSISTANT.value:
+def config_assistant_prompt():
+    if (
+        st.session_state["ai_assistant_type"]
+        == AssistantStrategy.CONTRACT_ASSISTANT.value
+    ):
         st.success("Contract Assistant Prompt")
-        st.session_state["answering_user_prompt"] = ConfigHelper.get_default_contract_assistant()
+        st.session_state["answering_user_prompt"] = (
+            ConfigHelper.get_default_contract_assistant()
+        )
+    elif (
+        st.session_state["ai_assistant_type"]
+        == AssistantStrategy.EMPLOYEE_ASSISTANT.value
+    ):
+        st.success("Employee Assistant Prompt")
+        st.session_state["answering_user_prompt"] = (
+            ConfigHelper.get_default_employee_assistant()
+        )
     else:
         st.success("Default Assistant Prompt")
         st.session_state["answering_user_prompt"] = (
@@ -201,7 +222,7 @@ try:
 {sources}
 
 ## User Question
-{question}
+Use the Retrieved Documents to answer the question: {question}
 ```"""
     )
     post_answering_prompt_help = "You can configure a post prompt that allows to fact-check or process the answer, given the sources, question and answer. This prompt needs to return `True` or `False`."
@@ -236,7 +257,7 @@ try:
             st.selectbox(
                 "Assistant Type",
                 key="ai_assistant_type",
-                on_change=config_contract_assistant_prompt,
+                on_change=config_assistant_prompt,
                 options=config.get_available_ai_assistant_types(),
                 help=ai_assistant_type_help,
             )
@@ -312,14 +333,14 @@ try:
                 lambda x: {
                     "document_type": x.document_type,
                     "chunking_strategy": (
-                        x.chunking.chunking_strategy.value if x.chunking else None
+                        x.chunking.chunking_strategy.value if x.chunking else "layout"
                     ),
                     "chunking_size": x.chunking.chunk_size if x.chunking else None,
                     "chunking_overlap": (
                         x.chunking.chunk_overlap if x.chunking else None
                     ),
                     "loading_strategy": (
-                        x.loading.loading_strategy.value if x.loading else None
+                        x.loading.loading_strategy.value if x.loading else "layout"
                     ),
                     "use_advanced_image_processing": x.use_advanced_image_processing,
                 },
@@ -359,16 +380,30 @@ try:
                     },
                 )
 
+        with st.expander("Chat history configuration", expanded=True):
+            st.checkbox("Enable chat history", key="enable_chat_history")
+
         with st.expander("Logging configuration", expanded=True):
             st.checkbox(
-                "Log user input and output (questions, answers, chat history, sources)",
+                "Log user input and output (questions, answers, conversation history, sources)",
                 key="log_user_interactions",
             )
             st.checkbox("Log tokens", key="log_tokens")
 
         if st.form_submit_button("Save configuration"):
-            document_processors = (
-                list(
+            document_processors = []
+            if env_helper.AZURE_SEARCH_USE_INTEGRATED_VECTORIZATION is False:
+                valid = all(
+                    row["document_type"]
+                    and row["chunking_strategy"]
+                    and row["loading_strategy"]
+                    for row in edited_document_processors
+                )
+                if not valid:
+                    st.error(
+                        "Please ensure all fields are selected and not left blank in Document processing configuration."
+                    )
+                document_processors = list(
                     map(
                         lambda x: {
                             "document_type": x["document_type"],
@@ -387,9 +422,6 @@ try:
                         edited_document_processors,
                     )
                 )
-                if env_helper.AZURE_SEARCH_USE_INTEGRATED_VECTORIZATION is False
-                else []
-            )
             current_config = {
                 "prompts": {
                     "condense_question_prompt": "",  # st.session_state['condense_question_prompt'],
@@ -429,6 +461,7 @@ try:
                     if env_helper.AZURE_SEARCH_USE_INTEGRATED_VECTORIZATION
                     else None
                 ),
+                "enable_chat_history": st.session_state["enable_chat_history"],
             }
             ConfigHelper.save_config_as_active(current_config)
             st.success(
